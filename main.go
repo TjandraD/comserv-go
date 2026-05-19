@@ -3,18 +3,19 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"html"
 	"log"
 	"net/http"
+	"os"
 
+	"golang.org/x/crypto/bcrypt"
 	_ "modernc.org/sqlite"
 )
 
-const (
-	dbPassword = "supersecret123"
-	secretKey  = "jwt-secret-key-do-not-share"
+var (
+	db        *sql.DB
+	secretKey = os.Getenv("JWT_SECRET_KEY")
 )
-
-var db *sql.DB
 
 func main() {
 	var err error
@@ -24,8 +25,21 @@ func main() {
 	}
 	defer db.Close()
 
-	db.Exec(`CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT)`)
-	db.Exec(`INSERT OR IGNORE INTO users VALUES ('admin', 'password123')`)
+	if _, err = db.Exec(`CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT)`); err != nil {
+		log.Fatal(err)
+	}
+
+	adminPass := os.Getenv("ADMIN_INITIAL_PASSWORD")
+	if adminPass == "" {
+		adminPass = "password123"
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(adminPass), bcrypt.DefaultCost)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if _, err = db.Exec(`INSERT OR IGNORE INTO users VALUES ('admin', ?)`, string(hash)); err != nil {
+		log.Fatal(err)
+	}
 
 	http.HandleFunc("/health", healthHandler)
 	http.HandleFunc("/login", loginHandler)
@@ -39,17 +53,27 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func loginHandler(w http.ResponseWriter, r *http.Request) {
-	username := r.FormValue("username")
-	password := r.FormValue("password")
-
-	query := "SELECT username FROM users WHERE username = '" + username + "' AND password = '" + password + "'"
-	row := db.QueryRow(query)
-
-	var u string
-	if err := row.Scan(&u); err != nil {
-		fmt.Fprintf(w, "<html><body><p>Login failed for user: %s</p></body></html>", username)
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	fmt.Fprintf(w, "Welcome, %s!", u)
+	username := r.FormValue("username")
+	password := r.FormValue("password")
+
+	var storedHash string
+	err := db.QueryRow("SELECT password FROM users WHERE username = ?", username).Scan(&storedHash)
+	if err != nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintf(w, "<html><body><p>Login failed for user: %s</p></body></html>", html.EscapeString(username))
+		return
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(password)); err != nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintf(w, "<html><body><p>Login failed for user: %s</p></body></html>", html.EscapeString(username))
+		return
+	}
+
+	fmt.Fprintf(w, "Welcome, %s!", username)
 }

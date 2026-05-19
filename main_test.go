@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/crypto/bcrypt"
 	_ "modernc.org/sqlite"
 )
 
@@ -24,7 +25,11 @@ func setupTestDB(t *testing.T) func() {
 	if _, err = db.Exec(`CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = db.Exec(`INSERT OR IGNORE INTO users VALUES ('admin', 'password123')`); err != nil {
+	hash, err := bcrypt.GenerateFromPassword([]byte("password123"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`INSERT OR IGNORE INTO users VALUES ('admin', ?)`, string(hash)); err != nil {
 		t.Fatal(err)
 	}
 	return func() { db.Close() }
